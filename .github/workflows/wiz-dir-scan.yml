@@ -145,7 +145,8 @@ jobs:
             --tag deploy_env=${{ matrix.deploy_env }} \
             --tag github_repo=${{ github.repository }} \
             --tag github_sha=${{ github.sha }} \
-            -o human,sarif:${{ matrix.tenant }}-${{ github.run_id }}.sarif,json:${{ matrix.tenant }}-${{ github.run_id }}.json \
+            -o human \
+            --sarif-output-file "${{ matrix.tenant }}-${{ github.run_id }}.sarif" \
             2>&1 | tee scan-output-${{ matrix.tenant }}.txt
           
           SCAN_EXIT_CODE=${PIPESTATUS[0]}
@@ -203,7 +204,6 @@ jobs:
           name: wiz-scan-${{ matrix.tenant }}-${{ github.run_id }}
           path: |
             ${{ matrix.tenant }}-${{ github.run_id }}.sarif
-            ${{ matrix.tenant }}-${{ github.run_id }}.json
             scan-output-${{ matrix.tenant }}.txt
           retention-days: 30
         continue-on-error: true

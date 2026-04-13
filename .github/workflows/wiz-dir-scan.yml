@@ -8,12 +8,9 @@ on:
         required: false
         type: choice
         options:
-        - advanced
-        - stgadvanced
-      wizcli_version:
-        description: 'Version of Wiz CLI to use for scanning'
-        required: true
-        default: '1.10.0'
+          - ''
+          - advanced
+          - stgadvanced
   push:
     branches:
       - main
@@ -27,41 +24,53 @@ permissions:
   contents: read
   actions: read
   security-events: write
+  pull-requests: write
 
 jobs:
   WizCLI-Dir-Scan:
     runs-on: ubuntu-latest
-    env:
-      WIZCLI_URL: https://downloads.wiz.io/experimental/v1/wizcli/latest/wizcli-linux-amd64
     strategy:
       fail-fast: false
       matrix:
-        tenant: [advanced, stgadvanced]
+        tenant: ${{ github.event.inputs.tenant != '' && fromJson(format('["{0}"]', github.event.inputs.tenant)) || fromJson('["advanced", "stgadvanced"]') }}
         include:
           - tenant: stgadvanced
             deploy_env: demo
-            op_item: tenant_stgadvanced-wizcli-sa
           - tenant: advanced
             deploy_env: demo
-            op_item: tenant_advanced-wizcli-sa
 
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@v4
 
-      - name: Configure 1Password Service Account
-        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      - name: Set Environment Secrets
+        id: secrets
+        run: |
+          if [ "${{ matrix.tenant }}" = "advanced" ]; then
+            echo "WIZ_CLIENT_ID=${{ secrets.WIZ_CLIENT_ID_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_CLIENT_SECRET=${{ secrets.WIZ_CLIENT_SECRET_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZCLI_URL=${{ secrets.WIZCLI_URL_ADVANCED }}" >> $GITHUB_ENV
+          elif [ "${{ matrix.tenant }}" = "stgadvanced" ]; then
+            echo "WIZ_CLIENT_ID=${{ secrets.WIZ_CLIENT_ID_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_CLIENT_SECRET=${{ secrets.WIZ_CLIENT_SECRET_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZCLI_URL=${{ secrets.WIZCLI_URL_STGADVANCED }}" >> $GITHUB_ENV
+          fi
 
-      - name: Load Environment Secrets
-        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          export-env: true
-        env:
-          WIZCLI_URL: op://wiz-demo/${{ matrix.op_item }}/wizcliUrl
-          WIZ_CLIENT_ID: op://wiz-demo/${{ matrix.op_item }}/username
-          WIZ_CLIENT_SECRET: op://wiz-demo/${{ matrix.op_item }}/password
+      - name: Validate Required Secrets
+        run: |
+          if [ -z "${{ env.WIZ_CLIENT_ID }}" ]; then
+            echo "::error::WIZ_CLIENT_ID secret is not set for tenant ${{ matrix.tenant }}"
+            exit 1
+          fi
+          if [ -z "${{ env.WIZ_CLIENT_SECRET }}" ]; then
+            echo "::error::WIZ_CLIENT_SECRET secret is not set for tenant ${{ matrix.tenant }}"
+            exit 1
+          fi
+          if [ -z "${{ env.WIZCLI_URL }}" ]; then
+            echo "::error::WIZCLI_URL secret is not set for tenant ${{ matrix.tenant }}"
+            exit 1
+          fi
+          echo "✓ All required secrets are configured for tenant ${{ matrix.tenant }}"
 
       - name: Get Wiz CLI SHA256
         id: get-sha256
@@ -72,7 +81,7 @@ jobs:
           echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
 
       - name: Cache Wiz CLI Binary
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
+        uses: actions/cache@v4
         with:
           path: ~/.wiz/wizcli
           key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
@@ -80,7 +89,7 @@ jobs:
             ${{ runner.os }}-wizcli-
 
       - name: Restore Wiz configuration and rules cache
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
+        uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ (matrix.deploy_env == '' || matrix.deploy_env == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', matrix.deploy_env) }}
           key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env || 'default' }}-${{ matrix.tenant }}
@@ -90,24 +99,57 @@ jobs:
             ${{ runner.os }}-wiz-config-
 
       - name: Install Wiz CLI
-        if: success() || (failure() && matrix.deploy_env == 'develop')
         run: |
-          if [ ! -f ~/.wiz/wizcli ]; then
-            echo "Downloading Wiz CLI..."
-            mkdir -p ~/.wiz
-            curl -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }} && chmod +x ~/.wiz/wizcli
-            echo "Downloaded Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
-          else
-            echo "Using cached Wiz CLI with SHA256: ${{ steps.get-sha256.outputs.sha256 }}"
+          EXPECTED_SHA256="${{ steps.get-sha256.outputs.sha256 }}"
+          
+          if [ -f ~/.wiz/wizcli ]; then
+            ACTUAL_SHA256=$(sha256sum ~/.wiz/wizcli | cut -d' ' -f1)
+            if [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ]; then
+              echo "✓ Using cached Wiz CLI (SHA256 verified)"
+              echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
+              exit 0
+            else
+              echo "Cache SHA256 mismatch, re-downloading..."
+            fi
           fi
+          
+          echo "Downloading Wiz CLI..."
+          mkdir -p ~/.wiz
+          curl -sL -o ~/.wiz/wizcli ${{ env.WIZCLI_URL }}
+          chmod +x ~/.wiz/wizcli
+          
+          # Verify download
+          DOWNLOADED_SHA256=$(sha256sum ~/.wiz/wizcli | cut -d' ' -f1)
+          if [ "$DOWNLOADED_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Downloaded Wiz CLI SHA256 mismatch!"
+            echo "::error::Expected: $EXPECTED_SHA256"
+            echo "::error::Got: $DOWNLOADED_SHA256"
+            exit 1
+          fi
+          
+          echo "✓ Wiz CLI downloaded and verified"
           echo "WIZCLI_PATH=$HOME/.wiz/wizcli" >> $GITHUB_ENV
 
-      - name: Run Wiz Security Scan
+      - name: Authenticate Wiz CLI
         run: |
-          sudo -E ${{ env.WIZCLI_PATH }} scan dir "." \
-          --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" --tag github_action_run_id=${{ github.run_id }} \
-          --tag tenant=${{ matrix.tenant }} --tag deploy_env=${{ matrix.deploy_env }} --sarif-output-file "${{ matrix.tenant }}-${{ github.run_id }}.json" --sbom-format spdx-json \
-          --sbom-output-file "${{ matrix.tenant }}-${{ github.run_id }}-sbom.json" --by-policy-hits="DISABLED"
+          ${{ env.WIZCLI_PATH }} auth --id "${{ env.WIZ_CLIENT_ID }}" --secret "${{ env.WIZ_CLIENT_SECRET }}"
+          echo "✓ Authenticated with Wiz (${{ matrix.tenant }})"
+
+      - name: Run Wiz Security Scan
+        id: scan
+        run: |
+          ${{ env.WIZCLI_PATH }} dir scan "." \
+            --name "${{ github.repository }}-${{ matrix.tenant }}-${{ github.run_id }}" \
+            --tag github_action_run_id=${{ github.run_id }} \
+            --tag tenant=${{ matrix.tenant }} \
+            --tag deploy_env=${{ matrix.deploy_env }} \
+            --tag github_repo=${{ github.repository }} \
+            --tag github_sha=${{ github.sha }} \
+            -o human,sarif:${{ matrix.tenant }}-${{ github.run_id }}.sarif,json:${{ matrix.tenant }}-${{ github.run_id }}.json \
+            2>&1 | tee scan-output-${{ matrix.tenant }}.txt
+          
+          SCAN_EXIT_CODE=${PIPESTATUS[0]}
+          echo "scan_exit_code=$SCAN_EXIT_CODE" >> $GITHUB_OUTPUT
         env:
           WIZ_ENV: ${{ matrix.deploy_env }}
         continue-on-error: true
@@ -117,7 +159,6 @@ jobs:
         id: get-cluster-sha256
         run: |
           echo "Checking for cluster files cache after scan..."
-          # Determine cache path based on deploy_env
           if [ -z "${{ matrix.deploy_env }}" ] || [ "${{ matrix.deploy_env }}" = "app" ]; then
             CACHE_DIR="$HOME/.wiz/clusterFilesCache"
           else
@@ -138,7 +179,7 @@ jobs:
 
       - name: Cache Wiz configuration and rules
         if: always() && steps.get-cluster-sha256.outputs.cache_exists == 'true'
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb  # v5.0.1
+        uses: actions/cache@v4
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
           key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}
@@ -148,16 +189,97 @@ jobs:
             ${{ runner.os }}-wiz-config-
 
       - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@5d4e8d1aca955e8d8589aabd499c5cae939e33c7  # v4
+        if: always() && hashFiles(format('{0}-{1}.sarif', matrix.tenant, github.run_id)) != ''
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.json"
+          sarif_file: "${{ matrix.tenant }}-${{ github.run_id }}.sarif"
           category: wiz-${{ matrix.tenant }}
         continue-on-error: true
 
-      - name: Upload SBOM file
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
+      - name: Upload Scan Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: sbom-${{ matrix.tenant }}-${{ github.run_id }}
-          path: "${{ matrix.tenant }}-${{ github.run_id }}-sbom.json"
+          name: wiz-scan-${{ matrix.tenant }}-${{ github.run_id }}
+          path: |
+            ${{ matrix.tenant }}-${{ github.run_id }}.sarif
+            ${{ matrix.tenant }}-${{ github.run_id }}.json
+            scan-output-${{ matrix.tenant }}.txt
           retention-days: 30
         continue-on-error: true
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tenant = '${{ matrix.tenant }}';
+            
+            // Read scan output
+            let scanOutput = '';
+            try {
+              scanOutput = fs.readFileSync(`scan-output-${tenant}.txt`, 'utf8');
+            } catch (e) {
+              scanOutput = 'No scan output available';
+            }
+            
+            const exitCode = '${{ steps.scan.outputs.scan_exit_code }}' || 'unknown';
+            const statusEmoji = exitCode === '0' ? '✅' : '⚠️';
+            const statusText = exitCode === '0' ? 'Passed' : 'Issues Found';
+            
+            // Truncate output if too long
+            const maxLen = 50000;
+            const truncatedOutput = scanOutput.length > maxLen 
+              ? scanOutput.substring(0, maxLen) + '\n\n... (output truncated)'
+              : scanOutput;
+            
+            const body = `## ${statusEmoji} Wiz Security Scan: \`${tenant}\` - ${statusText}
+            
+            ### Scan Details
+            | Property | Value |
+            |----------|-------|
+            | Tenant | \`${tenant}\` |
+            | Repository | \`${{ github.repository }}\` |
+            | Commit | \`${{ github.sha }}\` |
+            | Branch | \`${{ github.head_ref }}\` |
+            
+            <details>
+            <summary>📋 Full Scan Output</summary>
+            
+            \`\`\`
+            ${truncatedOutput}
+            \`\`\`
+            
+            </details>
+            
+            ---
+            *View detailed findings in the [Security tab](/${{ github.repository }}/security/code-scanning?query=tool:wiz-${tenant})*
+            `;
+            
+            // Find existing comment for this tenant to update
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const wizComment = comments.find(c => 
+              c.user.type === 'Bot' && c.body.includes(`Wiz Security Scan: \`${tenant}\``)
+            );
+            
+            if (wizComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: wizComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }

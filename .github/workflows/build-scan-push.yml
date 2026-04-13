@@ -54,30 +54,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Configure 1Password Service Account
-        uses: 1password/load-secrets-action/configure@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-
-      - name: Load Environment Secrets
-        uses: 1password/load-secrets-action@581a835fb51b8e7ec56b71cf2ffddd7e68bb25e0
-        with:
-          export-env: true
-        env:
-          IMAGE_REGISTRY: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryUrl
-          REGISTRY_REGION: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/registryRegion
-          WIF_PROVIDER: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/workloadIdentityProvider
-          WIF_SERVICE_ACCOUNT: op://wiz-demo/gar_${{ env.DEPLOY_ENV }}-registry/pusherServiceAccount
-          WIZ_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV}}-wizcli-sa/username
-          WIZ_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/password
-          WIZCLI_URL: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizcli-sa/wizcliUrl
-          WIZ_OS_REGISTRY: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryUrl
-          WIZ_OS_USER: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryUsername
-          WIZ_OS_PASSWORD: op://wiz-demo/tenant_${{ env.DEPLOY_ENV == 'stgadvanced' && 'adv-stg' || 'adv-prod' }}-tenant-info/wizOsRegistryPassword
-          WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/username
-          WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_${{ env.DEPLOY_ENV }}-wizos-apk-credentials/credential
-          # WIZ_OS_CLIENT_ID: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/username
-          # WIZ_OS_CLIENT_SECRET: op://wiz-demo/tenant_adv-${{ env.DEPLOY_ENV == 'staging' && 'stg-' || '' }}-wizos-apk-credentials/credential
+      - name: Set Environment Secrets
+        run: |
+          if [ "${{ env.DEPLOY_ENV }}" = "advanced" ]; then
+            echo "IMAGE_REGISTRY=${{ secrets.IMAGE_REGISTRY_ADVANCED }}" >> $GITHUB_ENV
+            echo "REGISTRY_REGION=${{ secrets.REGISTRY_REGION_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIF_PROVIDER=${{ secrets.WIF_PROVIDER_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIF_SERVICE_ACCOUNT=${{ secrets.WIF_SERVICE_ACCOUNT_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_CLIENT_ID=${{ secrets.WIZ_CLIENT_ID_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_CLIENT_SECRET=${{ secrets.WIZ_CLIENT_SECRET_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZCLI_URL=${{ secrets.WIZCLI_URL_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_OS_CLIENT_ID=${{ secrets.WIZ_OS_CLIENT_ID_ADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_OS_CLIENT_SECRET=${{ secrets.WIZ_OS_CLIENT_SECRET_ADVANCED }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_REGISTRY=${{ secrets.IMAGE_REGISTRY_STGADVANCED }}" >> $GITHUB_ENV
+            echo "REGISTRY_REGION=${{ secrets.REGISTRY_REGION_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIF_PROVIDER=${{ secrets.WIF_PROVIDER_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIF_SERVICE_ACCOUNT=${{ secrets.WIF_SERVICE_ACCOUNT_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_CLIENT_ID=${{ secrets.WIZ_CLIENT_ID_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_CLIENT_SECRET=${{ secrets.WIZ_CLIENT_SECRET_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZCLI_URL=${{ secrets.WIZCLI_URL_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_OS_CLIENT_ID=${{ secrets.WIZ_OS_CLIENT_ID_STGADVANCED }}" >> $GITHUB_ENV
+            echo "WIZ_OS_CLIENT_SECRET=${{ secrets.WIZ_OS_CLIENT_SECRET_STGADVANCED }}" >> $GITHUB_ENV
+          fi
+          # These are shared across environments
+          echo "WIZ_OS_REGISTRY=${{ secrets.WIZ_OS_REGISTRY }}" >> $GITHUB_ENV
+          echo "WIZ_OS_USER=${{ secrets.WIZ_OS_USER }}" >> $GITHUB_ENV
+          echo "WIZ_OS_PASSWORD=${{ secrets.WIZ_OS_PASSWORD }}" >> $GITHUB_ENV
 
       - name: Get Wiz CLI SHA256
         id: get-sha256
@@ -102,7 +105,6 @@ jobs:
             ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-${{ env.DEPLOY_ENV }}
             ${{ runner.os }}-wiz-config-${{ env.WIZ_ENV || 'default' }}-
             ${{ runner.os }}-wiz-config-
-
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
@@ -281,12 +283,11 @@ jobs:
         if: failure() && env.DEPLOY_ENV == 'develop'
         run: |
           echo "::error::Build failed for develop environment"
-          echo "::error::This may be due to ephemeral GAR registry issues. Please check:"
-          echo "::error::  1. Does the 'scenarios_gar-registry-develop' entry exist in 1Password?"
-          echo "::error::  2. Does the GAR registry referenced in 1Password still exist?"
-          echo "::error::  3. Are the credentials in 1Password still valid?"
-          echo "::error::"
-          echo "::error::If the develop GAR registry was deleted, you may need to:"
-          echo "::error::  - Create a new develop GAR registry"
-          echo "::error::  - Update the 'scenarios_gar-registry-develop' entry in 1Password with new registry details"
-          echo "::error::  - Or remove the 1Password entry if develop environment is no longer needed"
+          echo "::error::Please check that all required secrets are configured in GitHub:"
+          echo "::error::  - IMAGE_REGISTRY_STGADVANCED"
+          echo "::error::  - REGISTRY_REGION_STGADVANCED"
+          echo "::error::  - WIF_PROVIDER_STGADVANCED"
+          echo "::error::  - WIF_SERVICE_ACCOUNT_STGADVANCED"
+          echo "::error::  - WIZ_CLIENT_ID_STGADVANCED"
+          echo "::error::  - WIZ_CLIENT_SECRET_STGADVANCED"
+          echo "::error::  - WIZCLI_URL_STGADVANCED"

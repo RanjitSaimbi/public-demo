@@ -1,5 +1,5 @@
 name: Wiz CLI Multi-Tenant Directory Scan
-
+#  comment
 on:
   workflow_dispatch:
     inputs:

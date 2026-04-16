@@ -81,7 +81,7 @@ jobs:
           echo "sha256=$WIZCLI_SHA256" >> $GITHUB_OUTPUT
  
       - name: Cache Wiz CLI Binary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.wiz/wizcli
           key: ${{ runner.os }}-wizcli-${{ steps.get-sha256.outputs.sha256 }}
@@ -89,7 +89,7 @@ jobs:
             ${{ runner.os }}-wizcli-
  
       - name: Restore Wiz configuration and rules cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.wiz/${{ (matrix.deploy_env == '' || matrix.deploy_env == 'app') && 'clusterFilesCache' || format('{0}_clusterFilesCache', matrix.deploy_env) }}
           key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env || 'default' }}-${{ matrix.tenant }}
@@ -179,7 +179,7 @@ jobs:
  
       - name: Cache Wiz configuration and rules
         if: always() && steps.get-cluster-sha256.outputs.cache_exists == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.wiz/${{ matrix.deploy_env }}_clusterFilesCache
           key: ${{ runner.os }}-wiz-config-${{ matrix.deploy_env }}-${{ matrix.tenant }}
